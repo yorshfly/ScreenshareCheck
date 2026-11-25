@@ -1,0 +1,94 @@
+<#
+.SYNOPSIS
+    Extrae las entradas de BAM (Background Activity Moderator) del registro.
+
+.DESCRIPTION
+    Lee las claves de BAM para cada SID y devuelve la ruta del ejecutable y la
+    última fecha de ejecución (UTC y hora local). Requiere ejecutarse como Administrador.
+
+.PARAMETER GridView
+    Muestra el resultado en Out-GridView.
+
+.PARAMETER ExportCsv
+    Ruta de un archivo CSV donde guardar el resultado.
+
+.EXAMPLE
+    .\Get-BamEntries.ps1 -GridView
+.EXAMPLE
+    .\Get-BamEntries.ps1 -ExportCsv C:\temp\bam.csv
+#>
+[CmdletBinding()]
+param (
+    [switch]$GridView,
+    [string]$ExportCsv
+)
+
+#Requires -RunAsAdministrator
+
+# Windows 10 1809+ usa "State\UserSettings"; versiones anteriores usan "UserSettings"
+$BamPaths = @(
+    'HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings'
+    'HKLM:\SYSTEM\CurrentControlSet\Services\bam\UserSettings'
+)
+
+function Resolve-SidToName {
+    param ([string]$Sid)
+    try {
+        ([System.Security.Principal.SecurityIdentifier]$Sid).
+            Translate([System.Security.Principal.NTAccount]).Value
+    }
+    catch { $null }   # SID huérfano o no resoluble
+}
+
+function Get-BamEntry {
+    [CmdletBinding()]
+    param ()
+
+    $basePath = $BamPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $basePath) {
+        Write-Warning 'No se encontró la clave BAM en el registro.'
+        return
+    }
+
+    foreach ($sidKey in Get-ChildItem -LiteralPath $basePath -ErrorAction SilentlyContinue) {
+        $sid  = $sidKey.PSChildName
+        $user = Resolve-SidToName -Sid $sid
+
+        foreach ($name in $sidKey.GetValueNames()) {
+            # Solo rutas de ejecutables (\Device\HarddiskVolumeX\...), se omiten Version/SequenceNumber
+            if ($name -notlike '\Device\*') { continue }
+
+            $data = $sidKey.GetValue($name)
+            if ($data -isnot [byte[]] -or $data.Length -lt 8) { continue }
+
+            try {
+                # FILETIME (64 bits, little-endian) -> DateTime UTC
+                $utc = [DateTime]::FromFileTimeUtc([BitConverter]::ToInt64($data, 0))
+            }
+            catch { continue }   # valor fuera de rango
+
+            [PSCustomObject]@{
+                SID          = $sid
+                User         = $user
+                Path         = $name
+                LastRunUTC   = $utc.ToString('yyyy-MM-dd HH:mm:ss')
+                LastRunLocal = $utc.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')
+                _Sort        = $utc
+            }
+        }
+    }
+}
+
+$results = Get-BamEntry | Sort-Object _Sort -Descending | Select-Object SID, User, Path, LastRunUTC, LastRunLocal
+
+if ($ExportCsv) {
+    $results | Export-Csv -Path $ExportCsv -NoTypeInformation -Encoding UTF8
+    Write-Verbose "Resultados exportados a $ExportCsv"
+}
+
+if ($GridView) {
+    $results | Out-GridView -Title 'BAM Entries'
+}
+else {
+    $results
+}
