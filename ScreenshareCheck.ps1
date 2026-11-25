@@ -108,7 +108,7 @@ foreach ($p in @($camPath, $micPath)) {
 
 # --- Cierre ---
 Write-Section "FIN DEL REPORTE"
-"Revisa este archivo manualmente. No contiene contrasenas ni datos sensibles." | Add-Content -Path $OutputPath
+"Revisa este archivo manualmente. No contiene contraseñas ni datos sensibles." | Add-Content -Path $OutputPath
 "Reporte guardado en: $OutputPath" | Add-Content -Path $OutputPath
 
 Write-Host "Reporte generado correctamente en:" -ForegroundColor Green
